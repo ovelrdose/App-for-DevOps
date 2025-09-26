@@ -5,26 +5,44 @@ from werkzeug.utils import secure_filename
 from PIL import Image
 from datetime import datetime
 
+# Загрузка .env файла вручную
+def load_env_file():
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        print(f"Loading environment from: {env_path}")
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ.setdefault(key.strip(), value.strip())
+
+load_env_file()
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', '/app/static/uploads')
-app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024  # 2MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
 
-# Database configuration from environment variables
-DB_PATH = os.environ.get('DB_PATH', '/data/cats.db')
+# Универсальные пути для Docker
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Пути внутри контейнера (стандартные для Linux)
+DB_PATH = os.environ.get('DB_PATH', '/app/data/cats.db')
+UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER', '/app/uploads')
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 def get_db_connection():
     """Create database connection with row factory"""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # Enable column access by name
+    conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
     """Initialize database and create necessary directories"""
-    # Create directory for database if it doesn't exist
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    # Create upload directory if it doesn't exist
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     
     conn = get_db_connection()
@@ -42,7 +60,6 @@ def init_db():
     conn.close()
     print(f"Database initialized at: {DB_PATH}")
     print(f"Upload folder: {app.config['UPLOAD_FOLDER']}")
-
 def get_all_cats():
     """Get all cats from database"""
     conn = get_db_connection()
@@ -75,7 +92,6 @@ def delete_cat(cat_id):
     conn = get_db_connection()
     c = conn.cursor()
     
-    # First get file information
     c.execute('SELECT filename FROM cats WHERE id = ?', (cat_id,))
     result = c.fetchone()
     
@@ -83,12 +99,10 @@ def delete_cat(cat_id):
         filename = result['filename']
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         
-        # Delete image file
         if os.path.exists(filepath):
             os.remove(filepath)
             print(f"Deleted file: {filepath}")
         
-        # Delete database record
         c.execute('DELETE FROM cats WHERE id = ?', (cat_id,))
         conn.commit()
         conn.close()
@@ -106,7 +120,6 @@ def resize_image(image_path, max_size=(1000, 800)):
     """Resize image for optimization"""
     try:
         with Image.open(image_path) as img:
-            # Convert to RGB if necessary (for PNG with transparency)
             if img.mode in ('RGBA', 'P'):
                 img = img.convert('RGB')
             img.thumbnail(max_size)
@@ -163,7 +176,6 @@ def upload():
             except Exception as e:
                 flash('Ошибка при сохранении файла')
                 print(f"Upload error: {e}")
-                # Clean up if file was partially saved
                 if os.path.exists(filepath):
                     os.remove(filepath)
                 
@@ -199,21 +211,21 @@ def delete_cat_route(cat_id):
 
 @app.errorhandler(413)
 def too_large(e):
-    """Handle file too large error"""
     flash('Файл слишком большой. Максимальный размер: 2MB')
     return redirect(request.url)
 
-# Initialize database when module is imported
+# Initialize database
 init_db()
 
 if __name__ == '__main__':
-    host = os.environ.get('HOST', '0.0.0.0')
+    host = os.environ.get('HOST', '127.0.0.1')  # По умолчанию localhost на Windows
     port = int(os.environ.get('PORT', 5000))
-    debug = os.environ.get('DEBUG', 'false').lower() == 'true'
+    debug = os.environ.get('DEBUG', 'true').lower() == 'true'
     
     print(f"Starting Flask app on {host}:{port}")
     print(f"Debug mode: {debug}")
     print(f"Database path: {DB_PATH}")
     print(f"Upload folder: {app.config['UPLOAD_FOLDER']}")
+    print(f"Base directory: {BASE_DIR}")
     
     app.run(debug=debug, host=host, port=port)
