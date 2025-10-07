@@ -1,10 +1,12 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash,session
 import sqlite3
 import os
+
 from werkzeug.utils import secure_filename
+from functools import wraps
 from PIL import Image
 from datetime import datetime
-
+from werkzeug.security import check_password_hash, generate_password_hash
 # Загрузка .env файла вручную
 def load_env_file():
     env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -41,6 +43,47 @@ def get_db_connection():
     return conn
 
 def init_db():
+    """Initialize database and create necessary directories"""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Таблица котиков
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS cats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            title TEXT NOT NULL,
+            upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Таблица пользователей
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL
+        )
+    ''')
+
+    # Создаём первого администратора при инициализации (если ещё нет пользователей)
+    c.execute('SELECT COUNT(*) FROM users')
+    if c.fetchone()[0] == 0:
+        from werkzeug.security import generate_password_hash
+        admin_username = os.environ.get('ADMIN_USERNAME', 'admin')
+        admin_password = os.environ.get('ADMIN_PASSWORD', 'admin')
+        hashed = generate_password_hash(admin_password)
+        c.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)', (admin_username, hashed))
+        print(f"✅ Создан администратор: {admin_username} (пароль: {admin_password})")
+
+    conn.commit()
+    conn.close()
+    print(f"Database initialized at: {DB_PATH}")
+    print(f"Upload folder: {app.config['UPLOAD_FOLDER']}")
     """Initialize database and create necessary directories"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -184,6 +227,16 @@ def upload():
     
     return render_template('upload.html')
 
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            flash('Пожалуйста, войдите в систему.')
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 @app.route('/manage')
 def manage():
     """Cat management page"""
@@ -195,9 +248,36 @@ def manage():
         print(f"Database error: {e}")
         return render_template('manage.html', cats=[])
 
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        
+        conn = get_db_connection()
+        user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
+        conn.close()
+        
+        if user and check_password_hash(user['password_hash'], password):
+            session['user_id'] = user['id']
+            session['username'] = user['username']
+            flash('Вы вошли в систему!')
+            return redirect(url_for('manage'))
+        else:
+            flash('Неверное имя пользователя или пароль')
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash('Вы вышли из системы.')
+    return redirect(url_for('index'))
+
 @app.route('/delete/<int:cat_id>', methods=['POST'])
+@login_required
 def delete_cat_route(cat_id):
-    """Delete cat route"""
     try:
         if delete_cat(cat_id):
             flash('Котик успешно удален!')
@@ -219,7 +299,7 @@ init_db()
 
 if __name__ == '__main__':
     host = os.environ.get('HOST', '127.0.0.1')  # По умолчанию localhost на Windows
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 5001))
     debug = os.environ.get('DEBUG', 'true').lower() == 'true'
     
     print(f"Starting Flask app on {host}:{port}")
