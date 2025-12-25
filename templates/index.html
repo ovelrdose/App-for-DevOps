@@ -173,10 +173,16 @@
     <div class="header">
         <h1>🐱 Галерея котиков</h1>
         <div class="nav">
-            <a href="{{ url_for('index') }}">Главная</a>
-            <a href="{{ url_for('upload') }}">Загрузить котика</a>
-            <a href="{{ url_for('manage') }}">Управление котами</a>
-        </div>
+    <a href="{{ url_for('index') }}">Главная</a>
+    <a href="{{ url_for('upload') }}">Загрузить котика</a>
+    <a href="{{ url_for('manage') }}">Управление котами</a>
+    {% if session.user_id %}
+        <span style="color: white; margin-left: 20px;">Привет, {{ session.username }}!</span>
+        <a href="{{ url_for('logout') }}" style="color: #ff6b6b;">Выйти</a>
+    {% else %}
+        <a href="{{ url_for('login') }}">Войти</a>
+    {% endif %}
+</div>
     </div>
 
     <div class="container">
